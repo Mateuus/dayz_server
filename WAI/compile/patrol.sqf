@@ -1,39 +1,126 @@
-private ["_wpnumber","_radius","_mission","_unitGroup","_postition","_newPos","_center","_wp"];
-_unitGroup = _this select 0;
-_postition = _this select 1;
-if (count _this > 2) then {
-	_mission = _this select 2;
-} else {
-	_mission = False;
-};
+if (isServer) then {
 
-_radius = ai_patrol_radius;
-_wpnumber = ai_patrol_radius_wp;
+	_this spawn {
 
-if (_mission) then {
-	_radius = 1;
-	_wpnumber = 2;
-};
-_newPos = [(_postition select 0),(_postition select 1),0];
-_center = [(_postition select 0),(_postition select 1),0];
-for "_x" from 1 to _wpnumber do {
-	_pDir = random 360;
-    _pRange = 10 + random _radius;
-    _newPos = [(_center select 0) + (sin _pDir) * _pRange, (_center select 1) + (cos _pDir) * _pRange, 0];
-	if(surfaceIsWater _newPos)then{
-			private["_randomWay","_dir"];
-			_dir = (((_center) select 0) - (_newPos select 0)) atan2 (((_center) select 1) - (_newPos select 1));
-			_randomWay = floor(random 2); 
-			while{surfaceIsWater _newPos}do{
-				if(_randomWay == 0)then{_dir = _dir + 20;}else{_dir = _dir - 20;};
-				if(_dir < 0) then {_dir = _dir + 360;}; 
-				_newPos = [(_center select 0) + (sin _dir) * _pRange, (_center select 1) + (cos _dir) * _pRange, 0];
+		private["_vehicle","_position","_unitgroup","_waypoint_data","_num_waypoints","_leader","_count_wp","_waypoints","_waypoint_prev","_msg","_wp"];
+
+		_vehicle 		= _this select 0;
+		_position 		= _this select 1;
+		_unitgroup 		= _this select 2;
+		_waypoint_data 	= _this select 3;
+		_num_waypoints 	= _this select 4;
+		_leader			= leader _unitgroup;
+		_count_wp		= count _waypoint_data;
+		_waypoint_prev	= "";
+
+		_vehicle setvehiclelock "UNLOCKED";
+
+		_unitgroup setBehaviour "COMBAT";
+		_unitgroup setCombatMode "YELLOW";
+
+		{
+
+			if(_leader == _x) then {
+				_x assignAsDriver _vehicle;
+				_x moveInDriver _vehicle;
+				diag_log format["WAI: %1 assigned as driver",_x];
+			} else {
+
+				if((_vehicle emptyPositions "GUNNER") > 0) then {
+					_x assignAsGunner _vehicle;
+					_x moveInGunner _vehicle;
+
+					diag_log format["WAI: %1 assigned as gunner",_x];
+				} else {
+					_x moveInCargo _vehicle;
+					diag_log format["WAI: %1 assigned as cargo",_x];
+				};
+
 			};
+
+		} forEach units _unitgroup;
+
+		waitUntil {(_vehicle emptyPositions "DRIVER" == 0)};	// Wait until driver gets inside vehicle
+
+		diag_log format["WAI: Driver is inside vehicle, continue.."];
+
+		[_vehicle,_unitgroup] spawn {
+
+			private["_vehicle","_unitgroup","_runmonitor"];
+
+			_vehicle 	= _this select 0;
+			_unitgroup 	= _this select 1;
+			_runmonitor = true;
+
+			while {(canMove _vehicle && _runmonitor)} do {
+				if (fuel _vehicle < 0.2) then { _vehicle setfuel 1; };
+				if (!(alive leader _unitgroup)) then {
+					diag_log "WAI: Driver was killed, ejecting AI and removing waypoints.";
+					_runmonitor = false;
+				};
+				sleep .5;
+			};
+
+			if(_runmonitor) then {
+				diag_log "WAI: Vehicle became undriveable, ejecting crew.";
+			};
+
+			deleteWaypoint [_unitgroup, all];
+
+			waitUntil { (speed _vehicle < 10) };	// Wait until vehicle slows down before ejecting crew
+
+			{
+				_x action ["eject",vehicle _x];
+			} forEach crew _vehicle;
+
+			_wp = _unitgroup addWaypoint [(getPos _vehicle),0];
+			_wp setWaypointType "GUARD";
+			_wp setWaypointBehaviour "COMBAT";
+
+		};
+
+		for "_i" from 1 to _num_waypoints do {
+
+			_rand_nr = ceil(random((_count_wp - 1)));
+			_waypoint = (_waypoint_data select _rand_nr);
+			_waypoints set[_rand_nr,-1];
+			_waypoints = _waypoints - [-1];
+			
+			_wp = _unitgroup addWaypoint [(_waypoint select 1),0];
+			
+			if(_i == _num_waypoints) then { 
+				_wp setWaypointType "GUARD";
+			} else { 
+				_wp setWaypointType "MOVE";
+			};
+
+			_wp setWaypointBehaviour "CARELESS";
+			_wp setWaypointCombatMode "YELLOW";
+
+			if(_waypoint_prev != "") then {
+				_msg = format["[RADIO] The patrol arrived at %1, heading towards %2",_waypoint_prev,(_waypoint select 0)];
+			} else {
+				_msg = format["[RADIO] The patrol is seen moving towards %1",(_waypoint select 0)];
+			};
+			
+			sleep random(10);
+			
+			if (wai_radio_announce) then {
+				RemoteMessage = ["radio",_msg];
+				publicVariable "RemoteMessage";
+			} else {
+				[nil,nil,rTitleText,_msg,"PLAIN",10] call RE;
+			};
+			
+			waitUntil{sleep 1;((_vehicle distance (_waypoint select 1) < 30) || !(alive leader _unitgroup) || (!canMove _vehicle))};
+
+			if(!(alive leader _unitgroup) || (!canMove _vehicle)) exitWith {
+				diag_log "WAI: Crew has been ejected, stopping creation of new waypoints.";
+			};
+
+			_waypoint_prev = (_waypoint select 0);
+		};
+
 	};
-	_wp = _unitGroup addWaypoint [_newPos, 10];
-	_wp setWaypointType "SAD";
-	_wp setWaypointCompletionRadius 20;
+
 };
-_wp = _unitGroup addWaypoint [[(_postition select 0),(_postition select 1),0],10];
-_wp setWaypointType "CYCLE";
-_wp setWaypointCompletionRadius 20;
